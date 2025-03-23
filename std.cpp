@@ -43,6 +43,7 @@ static void testOneThread(unsigned n) { delete_list(create_list(n)); }
 static inline void test(unsigned n) {
   struct rusage start, finish;
   get_usage(start);
+  auto chronoStart = std::chrono::steady_clock::now();
 
   std::vector<std::thread> threads;
   for (int i = 0; i < THREADS_NUM; ++i)
@@ -51,11 +52,16 @@ static inline void test(unsigned n) {
     thread.join();
 
   get_usage(finish);
+  auto chronoEnd = std::chrono::steady_clock::now();
 
   struct timeval diff;
   timersub(&finish.ru_utime, &start.ru_utime, &diff);
   double time_used = diff.tv_sec + diff.tv_usec / 1000000.0;
-  cout << "Time used: " << time_used << " s\n";
+  cout << "USER Time used: " << time_used << " s\n";
+
+  auto chronoDuration = chronoEnd - chronoStart;
+  auto chronoSeconds = std::chrono::duration_cast<std::chrono::microseconds>(chronoDuration);
+  cout << "REAL Time used: " << chronoSeconds.count() / 1'000'000.0 << " s\n";
 
   double mem_used = (finish.ru_maxrss - start.ru_maxrss) / 1024.0;
   cout << "Memory used: " << mem_used << " MB\n";

@@ -1,2 +1,3 @@
-./std
-./global_mutex_pool
+std
+global_mutex_pool
+global_lockfree_pool

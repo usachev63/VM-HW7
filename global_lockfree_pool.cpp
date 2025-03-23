@@ -1,3 +1,4 @@
+#include <atomic>
 #include <cstring>
 #include <iomanip>
 #include <iostream>
@@ -10,6 +11,7 @@
 #include <sys/time.h>
 #include <thread>
 #include <vector>
+#include <chrono>
 
 #define THREADS_NUM 16
 
@@ -40,8 +42,7 @@ public:
 
   size_t pool_size;
   void *base_ptr;
-  char *free_ptr;
-  std::mutex mutex;
+  std::atomic<char *> free_ptr;
 } pool;
 
 static const char poolOverflowMessage[] = "pool exhausted\n";
@@ -77,7 +78,16 @@ void MyPool::init(size_t size) {
 }
 
 void *MyPool::alloc(size_t size) {
-  std::lock_guard _(mutex);
+  // operator-= of std::atomic<T *> atomically subtracts and returns the new
+  // value. This is enough for a lock-free implementation of this pool.
+  //
+  // The correctness can be verified by compiling with
+  // -fsanitize=thread (need clang++ as compiler).
+  // (Reduce n beforehand.)
+  // If we remove std::atomic from "free_ptr" field, then
+  // the sanitizer will find errors.
+  //
+  // See https://en.cppreference.com/w/cpp/atomic/atomic/operator_arith2
   return free_ptr -= size;
 }
 
@@ -111,7 +121,7 @@ static inline void test(unsigned n) {
   pool.init(THREADS_NUM * n * sizeof(Node));
   std::vector<std::thread> threads;
   for (int i = 0; i < THREADS_NUM; ++i)
-    threads.emplace_back(std::thread(testOneThread, 10'000'000));
+    threads.emplace_back(std::thread(testOneThread, n));
   for (auto &thread : threads)
     thread.join();
   pool.free();

@@ -1,3 +1,4 @@
 std
 global_mutex_pool
 global_lockfree_pool
+local_pools

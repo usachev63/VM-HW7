@@ -2,7 +2,6 @@
 #include <cstring>
 #include <iomanip>
 #include <iostream>
-#include <mutex>
 #include <signal.h>
 #include <stdint.h>
 #include <stdlib.h>

@@ -1,7 +1,6 @@
 #include <cstring>
 #include <iomanip>
 #include <iostream>
-#include <mutex>
 #include <signal.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -38,34 +37,34 @@ public:
 
   void free();
 
+  int id;
   size_t pool_size;
   void *base_ptr;
-  char *free_ptr;
-  std::mutex mutex;
-} pool[THREADS_NUM];
-
-static const char poolOverflowMessage[] = "pool exhausted\n";
-
-#define MAX_POOL_ID THREADS_NUM
+  char *volatile top_ptr;
+  char *volatile free_ptr;
+};
+MyPool pool[THREADS_NUM];
 thread_local int poolId;
 
-static void dump_pool_exhausted_message() {
+static void dump_pool_exhausted_message(int id) {
   constexpr char msg1[] = "pool #";
   constexpr char msg2[] = " exhausted\n";
   constexpr char digit[] = "0123456789";
   write(STDOUT_FILENO, msg1, sizeof msg1 - 1);
-  if (poolId >= 10)
+  if (id >= 10)
     write(STDOUT_FILENO, "1", 1);
-  int rem = poolId % 10;
+  int rem = id % 10;
   write(STDOUT_FILENO, digit + rem, 1);
   write(STDOUT_FILENO, msg2, sizeof msg2 - 1);
 }
 
 static void pool_sigsegv_handler(int, siginfo_t *info, void *ucontext) {
-  if (info->si_addr == pool[poolId].free_ptr) {
-    dump_pool_exhausted_message();
-    exit(1);
-  }
+  int id = poolId;
+  if (info->si_addr >= pool[id].free_ptr && info->si_addr <= pool[id].top_ptr)
+    dump_pool_exhausted_message(id);
+  constexpr char msg2[] = "SIGSEGV\n";
+  write(STDOUT_FILENO, msg2, sizeof msg2 - 1);
+  exit(1);
 }
 
 static constexpr size_t PAGE_SIZE = 4096;
@@ -81,18 +80,11 @@ void MyPool::init(size_t size) {
     std::cerr << "mmap failed: " << strerror(errno) << std::endl;
     std::exit(1);
   }
-  free_ptr = (char *)base_ptr + pool_size;
-
-  struct sigaction act = {0};
-  act.sa_sigaction = pool_sigsegv_handler;
-  act.sa_flags = SA_SIGINFO;
-  sigaction(SIGSEGV, &act, nullptr);
+  top_ptr = (char *)base_ptr + pool_size;
+  free_ptr = top_ptr;
 }
 
-void *MyPool::alloc(size_t size) {
-  std::lock_guard _(mutex);
-  return free_ptr -= size;
-}
+void *MyPool::alloc(size_t size) { return free_ptr -= size; }
 
 void MyPool::free() {
   if (munmap(base_ptr, pool_size) != 0) {
@@ -100,6 +92,7 @@ void MyPool::free() {
     std::exit(1);
   }
   base_ptr = nullptr;
+  top_ptr = nullptr;
   free_ptr = nullptr;
 }
 
@@ -122,6 +115,11 @@ static void testOneThread(unsigned n, int i) {
 }
 
 static inline void test(unsigned n) {
+  struct sigaction act = {0};
+  act.sa_sigaction = pool_sigsegv_handler;
+  act.sa_flags = SA_SIGINFO;
+  sigaction(SIGSEGV, &act, nullptr);
+
   struct rusage start, finish;
   get_usage(start);
   auto chronoStart = std::chrono::steady_clock::now();

@@ -1,3 +1,4 @@
+#include <atomic>
 #include <cstring>
 #include <iomanip>
 #include <iostream>
@@ -48,9 +49,10 @@ public:
   void *base_ptr;
   char *free_ptr;
 };
-thread_local MyPool pool;
+
 static char *pool_bottom[THREADS_NUM];
 static char *pool_top[THREADS_NUM];
+static std::atomic<int> nextPoolId;
 
 static void dump_pool_exhausted_message(int id) {
   constexpr char msg1[] = "pool #";
@@ -66,7 +68,8 @@ static void dump_pool_exhausted_message(int id) {
 
 static void pool_sigsegv_handler(int signal, siginfo_t *info, void *ucontext) {
   void *fault_addr = info->si_addr;
-  for (int id = 0; id < THREADS_NUM; ++id) {
+  int poolsNum = nextPoolId;
+  for (int id = 0; id < poolsNum; ++id) {
     if (fault_addr >= pool_bottom[id] - PAGE_SIZE &&
         fault_addr < pool_top[id]) {
       dump_pool_exhausted_message(id);
@@ -98,7 +101,7 @@ void MyPool::free() {
   free_ptr = nullptr;
 }
 
-static inline Node *create_list(unsigned n) {
+static inline Node *create_list(unsigned n, MyPool &pool) {
   Node *list = nullptr;
   for (unsigned i = 0; i < n; i++) {
     Node *newList = (Node *)pool.alloc(sizeof(Node));
@@ -110,13 +113,15 @@ static inline Node *create_list(unsigned n) {
 }
 
 static void testOneThread(unsigned n, int i) {
+  MyPool pool;
   // if (i == 3)
   //   pool.init(n);
   // else
   pool.init(n * sizeof(Node));
-  pool_bottom[i] = (char *)pool.base_ptr;
-  pool_top[i] = (char *)pool.base_ptr + pool.pool_size;
-  create_list(n);
+  int poolId = nextPoolId++;
+  pool_bottom[poolId] = (char *)pool.base_ptr;
+  pool_top[poolId] = (char *)pool.base_ptr + pool.pool_size;
+  create_list(n, pool);
   pool.free();
 }
 

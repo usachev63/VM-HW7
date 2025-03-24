@@ -48,10 +48,9 @@ public:
   void *base_ptr;
   char *free_ptr;
 };
-MyPool pool[THREADS_NUM];
+thread_local MyPool pool;
 static char *pool_bottom[THREADS_NUM];
 static char *pool_top[THREADS_NUM];
-thread_local int poolId;
 
 static void dump_pool_exhausted_message(int id) {
   constexpr char msg1[] = "pool #";
@@ -102,7 +101,7 @@ void MyPool::free() {
 static inline Node *create_list(unsigned n) {
   Node *list = nullptr;
   for (unsigned i = 0; i < n; i++) {
-    Node *newList = (Node *)pool[poolId].alloc(sizeof(Node));
+    Node *newList = (Node *)pool.alloc(sizeof(Node));
     newList->next = list;
     newList->node_id = i;
     list = newList;
@@ -111,9 +110,14 @@ static inline Node *create_list(unsigned n) {
 }
 
 static void testOneThread(unsigned n, int i) {
-  poolId = i;
+  // if (i == 3)
+  //   pool.init(n);
+  // else
+  pool.init(n * sizeof(Node));
+  pool_bottom[i] = (char *)pool.base_ptr;
+  pool_top[i] = (char *)pool.base_ptr + pool.pool_size;
   create_list(n);
-  pool[poolId].free();
+  pool.free();
 }
 
 static inline void test(unsigned n) {
@@ -126,14 +130,6 @@ static inline void test(unsigned n) {
   get_usage(start);
   auto chronoStart = std::chrono::steady_clock::now();
 
-  for (int i = 0; i < THREADS_NUM; ++i) {
-    if (i == 3)
-      pool[i].init(n);
-    else
-      pool[i].init(n * sizeof(Node));
-    pool_bottom[i] = (char *)pool[i].base_ptr;
-    pool_top[i] = (char *)pool[i].base_ptr + pool[i].pool_size;
-  }
   std::vector<std::thread> threads;
   for (int i = 0; i < THREADS_NUM; ++i) {
     threads.emplace_back(std::thread(testOneThread, n, i));
@@ -166,6 +162,6 @@ static inline void test(unsigned n) {
 }
 
 int main(const int argc, const char *argv[]) {
-  test(10'000);
+  test(10'000'000);
   return EXIT_SUCCESS;
 }

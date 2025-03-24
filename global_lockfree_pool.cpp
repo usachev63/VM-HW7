@@ -1,4 +1,5 @@
 #include <atomic>
+#include <chrono>
 #include <cstring>
 #include <iomanip>
 #include <iostream>
@@ -10,7 +11,6 @@
 #include <sys/time.h>
 #include <thread>
 #include <vector>
-#include <chrono>
 
 #define THREADS_NUM 16
 
@@ -87,7 +87,7 @@ void *MyPool::alloc(size_t size) {
   // the sanitizer will find errors.
   //
   // See https://en.cppreference.com/w/cpp/atomic/atomic/operator_arith2
-  return free_ptr -= size;
+  return free_ptr.fetch_sub(size, std::memory_order_relaxed) - size;
 }
 
 void MyPool::free() {
@@ -134,7 +134,8 @@ static inline void test(unsigned n) {
   cout << "USER Time used: " << time_used << " s\n";
 
   auto chronoDuration = chronoEnd - chronoStart;
-  auto chronoSeconds = std::chrono::duration_cast<std::chrono::microseconds>(chronoDuration);
+  auto chronoSeconds =
+      std::chrono::duration_cast<std::chrono::microseconds>(chronoDuration);
   cout << "REAL Time used: " << chronoSeconds.count() / 1'000'000.0 << " s\n";
 
   double mem_used = finish.ru_maxrss / 1024.0;

@@ -14,11 +14,18 @@
 
 using namespace std;
 
+struct sigaction old_sigsegv_act;
+
 static void get_usage(struct rusage &usage) {
   if (getrusage(RUSAGE_SELF, &usage)) {
     perror("Cannot get usage");
     exit(EXIT_SUCCESS);
   }
+}
+
+static constexpr size_t PAGE_SIZE = 4096;
+static constexpr size_t round_up_to_whole_pages(size_t size) {
+  return (size + (PAGE_SIZE - 1)) & -PAGE_SIZE;
 }
 
 struct Node {
@@ -37,13 +44,13 @@ public:
 
   void free();
 
-  int id;
   size_t pool_size;
   void *base_ptr;
-  char *volatile top_ptr;
-  char *volatile free_ptr;
+  char *free_ptr;
 };
 MyPool pool[THREADS_NUM];
+static char *pool_bottom[THREADS_NUM];
+static char *pool_top[THREADS_NUM];
 thread_local int poolId;
 
 static void dump_pool_exhausted_message(int id) {
@@ -58,18 +65,16 @@ static void dump_pool_exhausted_message(int id) {
   write(STDOUT_FILENO, msg2, sizeof msg2 - 1);
 }
 
-static void pool_sigsegv_handler(int, siginfo_t *info, void *ucontext) {
-  int id = poolId;
-  if (info->si_addr >= pool[id].free_ptr && info->si_addr <= pool[id].top_ptr)
-    dump_pool_exhausted_message(id);
-  constexpr char msg2[] = "SIGSEGV\n";
-  write(STDOUT_FILENO, msg2, sizeof msg2 - 1);
-  exit(1);
-}
-
-static constexpr size_t PAGE_SIZE = 4096;
-static constexpr size_t round_up_to_whole_pages(size_t size) {
-  return (size + (PAGE_SIZE - 1)) & -PAGE_SIZE;
+static void pool_sigsegv_handler(int signal, siginfo_t *info, void *ucontext) {
+  void *fault_addr = info->si_addr;
+  for (int id = 0; id < THREADS_NUM; ++id) {
+    if (fault_addr >= pool_bottom[id] - PAGE_SIZE &&
+        fault_addr < pool_top[id]) {
+      dump_pool_exhausted_message(id);
+      break;
+    }
+  }
+  old_sigsegv_act.sa_sigaction(signal, info, ucontext);
 }
 
 void MyPool::init(size_t size) {
@@ -80,8 +85,7 @@ void MyPool::init(size_t size) {
     std::cerr << "mmap failed: " << strerror(errno) << std::endl;
     std::exit(1);
   }
-  top_ptr = (char *)base_ptr + pool_size;
-  free_ptr = top_ptr;
+  free_ptr = (char *)base_ptr + pool_size;
 }
 
 void *MyPool::alloc(size_t size) { return free_ptr -= size; }
@@ -92,7 +96,6 @@ void MyPool::free() {
     std::exit(1);
   }
   base_ptr = nullptr;
-  top_ptr = nullptr;
   free_ptr = nullptr;
 }
 
@@ -109,7 +112,6 @@ static inline Node *create_list(unsigned n) {
 
 static void testOneThread(unsigned n, int i) {
   poolId = i;
-  pool[poolId].init(n * sizeof(Node));
   create_list(n);
   pool[poolId].free();
 }
@@ -118,12 +120,20 @@ static inline void test(unsigned n) {
   struct sigaction act = {0};
   act.sa_sigaction = pool_sigsegv_handler;
   act.sa_flags = SA_SIGINFO;
-  sigaction(SIGSEGV, &act, nullptr);
+  sigaction(SIGSEGV, &act, &old_sigsegv_act);
 
   struct rusage start, finish;
   get_usage(start);
   auto chronoStart = std::chrono::steady_clock::now();
 
+  for (int i = 0; i < THREADS_NUM; ++i) {
+    if (i == 3)
+      pool[i].init(n);
+    else
+      pool[i].init(n * sizeof(Node));
+    pool_bottom[i] = (char *)pool[i].base_ptr;
+    pool_top[i] = (char *)pool[i].base_ptr + pool[i].pool_size;
+  }
   std::vector<std::thread> threads;
   for (int i = 0; i < THREADS_NUM; ++i) {
     threads.emplace_back(std::thread(testOneThread, n, i));
@@ -156,6 +166,6 @@ static inline void test(unsigned n) {
 }
 
 int main(const int argc, const char *argv[]) {
-  test(10'000'000);
+  test(10'000);
   return EXIT_SUCCESS;
 }

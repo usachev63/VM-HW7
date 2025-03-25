@@ -62,15 +62,35 @@ struct PoolRegistry {
   std::atomic<int> nextPoolId;
 } poolRegistry;
 
+static void signal_safe_itoa(char *out, unsigned x) {
+  if (x == 0) {
+    strcpy(out, "0");
+    return;
+  }
+  char *current = out;
+  while (x > 0) {
+    *current++ = '0' + x % 10;
+    x /= 10;
+  }
+  *current = '\0';
+  char *left = out;
+  char *right = current - 1;
+  while (left < right) {
+    char tmp = *right;
+    *right = *left;
+    *left = tmp;
+    ++left;
+    --right;
+  }
+}
+
 static void dump_pool_exhausted_message(int id) {
   constexpr char msg1[] = "pool #";
   constexpr char msg2[] = " exhausted\n";
-  constexpr char digit[] = "0123456789";
   write(STDOUT_FILENO, msg1, sizeof msg1 - 1);
-  if (id >= 10)
-    write(STDOUT_FILENO, "1", 1);
-  int rem = id % 10;
-  write(STDOUT_FILENO, digit + rem, 1);
+  char printedId[32];
+  signal_safe_itoa(printedId, id);
+  write(STDOUT_FILENO, printedId, strlen(printedId));
   write(STDOUT_FILENO, msg2, sizeof msg2 - 1);
 }
 
@@ -124,7 +144,7 @@ static inline Node *create_list(unsigned n, MyPool &pool) {
 
 static void testOneThread(unsigned n, int i) {
   MyPool pool;
-  // if (i == 3)
+  // if (i == 12)
   //   pool.init(n);
   // else
   pool.init(n * sizeof(Node));

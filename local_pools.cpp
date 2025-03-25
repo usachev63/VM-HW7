@@ -114,7 +114,7 @@ void MyPool::init(size_t size) {
   base_ptr = mmap(nullptr, pool_size, PROT_READ | PROT_WRITE | PROT_GROWSDOWN,
                   MAP_PRIVATE | MAP_ANONYMOUS | MAP_GROWSDOWN, -1, 0);
   if (base_ptr == MAP_FAILED) {
-    std::cerr << "mmap failed: " << strerror(errno) << std::endl;
+    perror("pool allocate (mmap) failed");
     std::exit(1);
   }
   free_ptr = (char *)base_ptr + pool_size;
@@ -124,7 +124,7 @@ void *MyPool::alloc(size_t size) { return free_ptr -= size; }
 
 void MyPool::free() {
   if (munmap(base_ptr, pool_size) != 0) {
-    std::cerr << "munmap failed" << std::endl;
+    perror("pool free (munmap) failed");
     std::exit(1);
   }
   base_ptr = nullptr;

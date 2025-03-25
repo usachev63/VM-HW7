@@ -48,18 +48,35 @@ public:
   size_t pool_size;
   void *base_ptr;
   char *free_ptr;
+  int id;
 };
 
 struct PoolRegistryRecord {
   char *bottom;
   char *top;
-  std::atomic<bool> active = false;
+  std::atomic<MyPool *> ptr;
 };
 
 struct PoolRegistry {
   static constexpr size_t MAX_POOLS = 128;
   PoolRegistryRecord pools[MAX_POOLS];
-  std::atomic<int> nextPoolId;
+
+  void registerPool(MyPool &pool) {
+    while (true) {
+      for (int i = 0; i < MAX_POOLS; ++i) {
+        MyPool *expected = nullptr;
+        if (pools[i].ptr.compare_exchange_strong(expected, &pool)) {
+          pool.id = i;
+          pools[i].bottom = (char *)pool.base_ptr;
+          pools[i].top = (char *)pool.base_ptr + pool.pool_size;
+          return;
+        }
+      }
+    }
+  }
+
+  void unregister(MyPool &pool) { pools[pool.id].ptr = nullptr; }
+
 } poolRegistry;
 
 static void signal_safe_itoa(char *out, unsigned x) {
@@ -96,12 +113,15 @@ static void dump_pool_exhausted_message(int id) {
 
 static void pool_sigsegv_handler(int signal, siginfo_t *info, void *ucontext) {
   void *fault_addr = info->si_addr;
-  int poolsNum = poolRegistry.nextPoolId;
-  for (int id = 0; id < poolsNum; ++id) {
-    if (!poolRegistry.pools[id].active)
+  for (int id = 0; id < PoolRegistry::MAX_POOLS; ++id) {
+    void *pool = poolRegistry.pools[id].ptr;
+    if (!pool)
       continue;
-    if (fault_addr >= poolRegistry.pools[id].bottom - PAGE_SIZE &&
-        fault_addr < poolRegistry.pools[id].top) {
+    char *bottom = poolRegistry.pools[id].bottom;
+    char *top = poolRegistry.pools[id].top;
+    if (pool != poolRegistry.pools[id].ptr)
+      continue;
+    if (fault_addr >= bottom - PAGE_SIZE && fault_addr < top) {
       dump_pool_exhausted_message(id);
       break;
     }
@@ -129,6 +149,7 @@ void MyPool::free() {
   }
   base_ptr = nullptr;
   free_ptr = nullptr;
+  poolRegistry.unregister(*this);
 }
 
 static inline Node *create_list(unsigned n, MyPool &pool) {
@@ -148,10 +169,7 @@ static void testOneThread(unsigned n, int i) {
   //   pool.init(n);
   // else
   pool.init(n * sizeof(Node));
-  int poolId = poolRegistry.nextPoolId++;
-  poolRegistry.pools[poolId].bottom = (char *)pool.base_ptr;
-  poolRegistry.pools[poolId].top = (char *)pool.base_ptr + pool.pool_size;
-  poolRegistry.pools[poolId].active = true;
+  poolRegistry.registerPool(pool);
   create_list(n, pool);
   pool.free();
 }

@@ -50,9 +50,17 @@ public:
   char *free_ptr;
 };
 
-static char *pool_bottom[THREADS_NUM];
-static char *pool_top[THREADS_NUM];
-static std::atomic<int> nextPoolId;
+struct PoolRegistryRecord {
+  char *bottom;
+  char *top;
+  std::atomic<bool> active = false;
+};
+
+struct PoolRegistry {
+  static constexpr size_t MAX_POOLS = 128;
+  PoolRegistryRecord pools[MAX_POOLS];
+  std::atomic<int> nextPoolId;
+} poolRegistry;
 
 static void dump_pool_exhausted_message(int id) {
   constexpr char msg1[] = "pool #";
@@ -68,10 +76,12 @@ static void dump_pool_exhausted_message(int id) {
 
 static void pool_sigsegv_handler(int signal, siginfo_t *info, void *ucontext) {
   void *fault_addr = info->si_addr;
-  int poolsNum = nextPoolId;
+  int poolsNum = poolRegistry.nextPoolId;
   for (int id = 0; id < poolsNum; ++id) {
-    if (fault_addr >= pool_bottom[id] - PAGE_SIZE &&
-        fault_addr < pool_top[id]) {
+    if (!poolRegistry.pools[id].active)
+      continue;
+    if (fault_addr >= poolRegistry.pools[id].bottom - PAGE_SIZE &&
+        fault_addr < poolRegistry.pools[id].top) {
       dump_pool_exhausted_message(id);
       break;
     }
@@ -118,9 +128,10 @@ static void testOneThread(unsigned n, int i) {
   //   pool.init(n);
   // else
   pool.init(n * sizeof(Node));
-  int poolId = nextPoolId++;
-  pool_bottom[poolId] = (char *)pool.base_ptr;
-  pool_top[poolId] = (char *)pool.base_ptr + pool.pool_size;
+  int poolId = poolRegistry.nextPoolId++;
+  poolRegistry.pools[poolId].bottom = (char *)pool.base_ptr;
+  poolRegistry.pools[poolId].top = (char *)pool.base_ptr + pool.pool_size;
+  poolRegistry.pools[poolId].active = true;
   create_list(n, pool);
   pool.free();
 }
